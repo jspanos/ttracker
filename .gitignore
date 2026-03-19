@@ -1,0 +1,32 @@
+# Swift Package Manager
+swift/.build/
+swift/build/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# User data (never commit)
+~/.ttracker/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets / local config
+.env
+.env.local

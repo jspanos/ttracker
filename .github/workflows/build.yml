@@ -1,0 +1,81 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build universal binary
+    runs-on: macos-14  # Apple Silicon; can cross-compile x86_64 via lipo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build universal TTracker.app
+        run: cd swift && ./build.sh --universal
+
+      - name: Verify binary architectures
+        run: lipo -info swift/build/TTracker.app/Contents/MacOS/ttracker
+
+      - name: Zip artifact
+        run: |
+          cd swift/build
+          zip -r --symlinks TTracker.zip TTracker.app
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TTracker
+          path: swift/build/TTracker.zip
+          retention-days: 14
+
+  release:
+    name: Create release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TTracker
+
+      - name: Rename with version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: mv TTracker.zip "TTracker-${TAG}.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: TTracker ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: TTracker-${{ github.ref_name }}.zip
+          body: |
+            ## Installation
+
+            1. Download `TTracker-${{ github.ref_name }}.zip` below
+            2. Unzip and move `TTracker.app` to `/Applications`
+            3. Open it once — macOS will prompt for Accessibility, Automation, and Input Monitoring permissions
+            4. Enable **Launch at Login** in the TTracker Settings menu
+
+            > **Note:** The app is ad-hoc signed (not notarized). On first launch, right-click → Open to bypass Gatekeeper.
+
+            ### Build from source
+            ```bash
+            git clone https://github.com/${{ github.repository }}.git
+            cd ttracker/swift
+            ./build.sh --install
+            ```
