@@ -264,25 +264,41 @@ func getBatteryInfo() -> BatteryInfo {
 
 // MARK: - Audio / media detection
 
-/// Return true if any app is actively playing media (video or audio).
+/// Return true if any GUI media or browser app is actively playing media.
 ///
-/// Uses IOKit `IOPMCopyAssertionsStatus` — browsers and media players post
-/// `NoDisplaySleepAssertion` ("Video Wake Lock") and `NoIdleSleepAssertion`
-/// ("Playing audio") while content is playing. This is a native in-process call:
-/// no subprocess, no blocking, works on all Mac hardware including Apple Silicon.
-///
-/// The previous ioreg/IOAudioEngine approach returned no output on this machine
-/// because Apple Silicon uses different audio driver names.
+/// Uses IOKit `IOPMCopyAssertionsByProcess` to inspect assertions per process,
+/// then cross-checks the asserting PID against `NSRunningApplication` to get
+/// its display name. CLI tools (caffeinate, etc.) return nil from
+/// NSRunningApplication and are ignored — only known media/browser GUI apps
+/// count. This prevents caffeinate or system daemons from falsely suppressing
+/// idle detection overnight.
 func isAudioPlaying() -> Bool {
     var ref: Unmanaged<CFDictionary>? = nil
-    guard IOPMCopyAssertionsStatus(&ref) == kIOReturnSuccess,
-          let dict = ref?.takeRetainedValue() as? [String: NSNumber]
+    guard IOPMCopyAssertionsByProcess(&ref) == kIOReturnSuccess,
+          let dict = ref?.takeRetainedValue() as? [NSNumber: [[String: Any]]]
     else { return false }
 
-    // Browsers post these when playing video or audio.
-    let mediaKeys = ["NoDisplaySleepAssertion", "NoIdleSleepAssertion",
-                     "PreventUserIdleDisplaySleep"]
-    return mediaKeys.contains { dict[$0]?.intValue ?? 0 > 0 }
+    let mediaAssertionTypes: Set<String> = [
+        "NoDisplaySleepAssertion",
+        "NoIdleSleepAssertion",
+        "PreventUserIdleDisplaySleep",
+    ]
+    let mediaApps = PASSIVE_APPS.union(BROWSER_APPS)
+
+    for (pidNum, assertions) in dict {
+        // CLI tools (caffeinate, pmset, etc.) are not GUI apps — skip them.
+        guard let app = NSRunningApplication(processIdentifier: pid_t(pidNum.int32Value)),
+              let name = app.localizedName,
+              mediaApps.contains(name) else { continue }
+
+        for assertion in assertions {
+            if let type = assertion[kIOPMAssertionTypeKey as String] as? String,
+               mediaAssertionTypes.contains(type) {
+                return true
+            }
+        }
+    }
+    return false
 }
 
 // MARK: - Notification
