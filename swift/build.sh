@@ -109,7 +109,7 @@ codesign --verify --deep --strict "$APP_DIR" && echo "    Signature OK"
 # ── 5. Optionally install to /Applications ────────────────────────────────────
 if $INSTALL; then
     DEST="/Applications/TTracker.app"
-    echo "==> Installing to $DEST…"
+    echo "==> Installing to ${DEST}…"
     rm -rf "$DEST"
     cp -R "$APP_DIR" "$DEST"
     echo "==> Installed: $DEST"
