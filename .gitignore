@@ -30,3 +30,4 @@ DerivedData/
 # Secrets / local config
 .env
 .env.local
+.claude/

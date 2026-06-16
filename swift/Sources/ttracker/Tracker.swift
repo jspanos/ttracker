@@ -37,6 +37,8 @@ final class Tracker {
     private var trackingDay:    String  = isoToday()
     private var milestoneSent:  Set<Int> = []
     private var sleptAt:        Double  = 0   // timestamp of last sleep notification
+    private var lastWakeAt:     Double  = 0   // timestamp of last confirmed wake; floor for idleEnteredAt
+    private var lastIdleExitTS: Double  = 0   // timestamp of last idle→active transition; floor for idleEnteredAt
 
     private var lastBattery:    BatteryInfo    = .unknown
 
@@ -179,6 +181,20 @@ final class Tracker {
                 defer { self.pollInFlight = false }
 
                 self.stateQueue.sync {
+                    // Defensive wake cleanup: didWakeNotification can be missed on brief
+                    // or back-to-back sleep/wake cycles. If poll fires while sleptAt is
+                    // still set, the poll-before-sleep race may have opened a ghost session
+                    // that would span the entire sleep. Clean up exactly as handleWake would.
+                    if self.sleptAt > 0 {
+                        if self.sess != nil { self.closeSession(endedAt: self.sleptAt) }
+                        self.resetSession()
+                        self.lastWakeAt    = now
+                        self.sleptAt       = 0
+                        self.isIdle        = false
+                        self.idleEnteredAt = nil
+                        auditLog("WAKE_RECOVERY  (didWakeNotification missed; ghost session closed)")
+                    }
+
                     if userIdle {
                         if !self.isIdle {
                             let closeAt: Double
@@ -190,7 +206,12 @@ final class Tracker {
                             }
                             self.closeSession(endedAt: closeAt)
                             self.resetSession()
-                            self.idleEnteredAt = now - idleSecs
+                            // Floor idleEnteredAt to the later of lastIdleExitTS and lastWakeAt
+                            // so rapid idle cycles or post-sleep polls can't backdate into a
+                            // period already counted as idle (Bug 2 & 3).
+                            let idleFloor = max(self.lastIdleExitTS, self.lastWakeAt)
+                            let idleStarted = now - idleSecs
+                            self.idleEnteredAt = idleFloor > 0 ? max(idleStarted, idleFloor) : idleStarted
                             auditLog("IDLE_ENTER")
                         }
                         self.isIdle = true
@@ -206,10 +227,21 @@ final class Tracker {
                             let idleDur = self.idleEnteredAt.map { now - $0 } ?? 0
                             self.todayIdleSecs += idleDur
                             self.idleEnteredAt  = nil
+                            self.lastIdleExitTS = now
                             auditLog("IDLE_EXIT  idle_duration=\(formatDuration(idleDur))")
                         }
 
-                        if self.sess == nil {
+                        let excluded = SYSTEM_EXCLUDED_APPS.contains(activity.appName)
+                        if excluded {
+                            // System overlay (lock screen / screensaver) — close any open
+                            // session at the last poll boundary but don't open a new one.
+                            // Idle detection will naturally handle the gap.
+                            if self.sess != nil {
+                                let switchTS = (prevPoll > 0 && prevPoll > self.sessStart + 1.0) ? prevPoll : now
+                                self.closeSession(endedAt: switchTS)
+                                self.resetSession()
+                            }
+                        } else if self.sess == nil {
                             self.startSession(activity: activity, ts: now, fresh: true)
                         } else if activity.appName    != self.sess!.appName ||
                                   activity.windowTitle != self.sess!.windowTitle {
@@ -232,7 +264,8 @@ final class Tracker {
                     }
 
                     let total = self.computeTotalSeconds(now: now)
-                    self.onRefresh?(userIdle ? nil : activity, total, userIdle)
+                    let visibleActivity = (userIdle || SYSTEM_EXCLUDED_APPS.contains(activity.appName)) ? nil : activity
+                    self.onRefresh?(visibleActivity, total, userIdle)
                 }
 
                 // Notifications are checked outside the state lock.
@@ -397,6 +430,7 @@ final class Tracker {
 
     private func handleWake() {
         stateQueue.sync {
+            let now = Date().timeIntervalSince1970
             // Close any session that leaked through the sleep/wake race:
             // the poll timer can fire between handleSleep releasing stateQueue
             // and the OS actually suspending the process, opening a new session
@@ -405,9 +439,11 @@ final class Tracker {
                 closeSession(endedAt: sleptAt)
             }
             resetSession()
-            sleptAt       = 0
-            isIdle        = false
-            idleEnteredAt = nil
+            lastWakeAt     = now   // floor for subsequent idleEnteredAt calculations
+            lastIdleExitTS = 0     // stale pre-sleep exit must not constrain post-wake idle
+            sleptAt        = 0
+            isIdle         = false
+            idleEnteredAt  = nil
         }
         auditLog("WAKE")
     }

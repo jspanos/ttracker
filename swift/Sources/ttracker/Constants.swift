@@ -107,6 +107,15 @@ let APP_CATEGORIES: [String: String] = [
     "CleanMyMac": "system", "iStat Menus": "system",
 ]
 
+/// System overlay processes that should never be recorded as activity.
+/// loginwindow: frontmost during screen lock (cmd+ctrl+q) and the login screen.
+/// ScreenSaverEngine: frontmost while the screensaver is running (no-password mode).
+/// Neither represents intentional user work; idle detection handles the gap naturally.
+let SYSTEM_EXCLUDED_APPS: Set<String> = [
+    "loginwindow",
+    "ScreenSaverEngine",
+]
+
 // MARK: - Modifier key codes (filtered from keystroke count)
 
 /// Virtual key codes for modifier keys.  Pressed in isolation these are not
